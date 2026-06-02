@@ -1,183 +1,76 @@
 // @ts-nocheck
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {
-  ActivityIndicator,
-  NativeModules,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-// @ts-ignore
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import {
   Camera,
   useCameraDevice,
   useCameraPermission,
-  useFrameOutput, // V5 API
+  useFrameProcessor,
 } from 'react-native-vision-camera';
-import {useRunOnJS} from 'react-native-worklets-core';
-import {FaceLandmark, useFaceLiveness} from './useFaceLiveness';
-
-type FaceMeshResult = {
-  landmarks: FaceLandmark[];
-};
-
-type FacialAuthNative = {
-  verifyFace: (imagePath: string) => Promise<number[]>;
-};
+import { scanFaces } from 'react-native-vision-camera-face-detector';
+import { runOnJS } from 'react-native-reanimated';
+import { LivenessStep, useFaceLiveness } from './useFaceLiveness';
 
 export default function AuthScreen() {
-  const cameraRef = useRef<any>(null);
-  const {hasPermission, requestPermission} = useCameraPermission();
+  const cameraRef = useRef<Camera>(null);
+  const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('front');
+  const [landmarks, setLandmarks] = useState(null);
 
-  const [landmarks, setLandmarks] = useState<FaceLandmark[] | null>(null);
-  const [errorText, setErrorText] = useState<string | null>(null);
-
-  const {isLive, promptText} = useFaceLiveness(landmarks);
-
-  const facialAuth = (NativeModules as {FacialAuth?: FacialAuthNative}).FacialAuth;
-  const captureInFlightRef = useRef(false);
-  const captureDoneRef = useRef(false);
+  // FSM Hook
+  const { step, promptText, isVerifying } = useFaceLiveness(landmarks);
 
   useEffect(() => {
-    if (!hasPermission) {
-      requestPermission().catch(error => {
-        setErrorText(
-          error instanceof Error ? error.message : 'Camera permission request failed.',
-        );
-      });
-    }
+    if (!hasPermission) requestPermission();
   }, [hasPermission, requestPermission]);
 
-  const onLandmarks = useCallback((nextLandmarks: FaceLandmark[]) => {
+  const onLandmarks = useCallback((nextLandmarks) => {
     setLandmarks(nextLandmarks);
   }, []);
-  const onLandmarksWorklet = useRunOnJS(onLandmarks, [onLandmarks]);
 
-  // V5 API FIX: Replaced useFrameProcessor with useFrameOutput
-  const frameOutput = useFrameOutput({
-    pixelFormat: 'yuv',
-    onFrame: (frame: any) => {
-      'worklet';
-      try {
-        if (typeof global.faceMesh === 'undefined') {
-          return;
-        }
-        
-        const result = global.faceMesh(frame) as FaceMeshResult | null;
-        
-        if (result && result.landmarks && result.landmarks.length > 0) {
-          onLandmarksWorklet(result.landmarks);
-        }
-      } finally {
-        // V5 STRICT REQUIREMENT: You MUST dispose the frame
-        frame.dispose();
-      }
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    const faces = scanFaces(frame);
+    if (faces && faces.length > 0) {
+      runOnJS(onLandmarks)(faces[0].landmarks);
     }
-  });
+  }, [onLandmarks]);
 
-  useEffect(() => {
-    if (!isLive || captureInFlightRef.current || captureDoneRef.current) {
-      return;
-    }
-    if (!facialAuth?.verifyFace) {
-      setErrorText('FacialAuth native module is unavailable.');
-      captureDoneRef.current = true;
-      return;
-    }
-
-    captureInFlightRef.current = true;
-    (async () => {
-      const camera = cameraRef.current;
-      if (!camera) {
-        throw new Error('Camera not ready.');
-      }
-      const photo = await camera.takePhoto({skipMetadata: true});
-      await facialAuth.verifyFace(photo.path);
-    })()
-      .catch(error => {
-        setErrorText(error instanceof Error ? error.message : 'Verification failed.');
-      })
-      .finally(() => {
-        captureInFlightRef.current = false;
-        captureDoneRef.current = true;
-      });
-  }, [facialAuth, isLive]);
-
-  if (!device) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator color="#fff" />
-      </View>
-    );
-  }
-
-  if (!hasPermission) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.infoText}>Camera permission required.</Text>
-      </View>
-    );
-  }
+  if (!device) return <ActivityIndicator color="#fff" style={StyleSheet.absoluteFill} />;
+  if (!hasPermission) return <Text style={styles.infoText}>Camera permission required.</Text>;
 
   return (
     <View style={styles.container}>
-      {/* @ts-ignore */}
       <Camera
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={true}
         photo={true}
-        audio={false}
-        outputs={[frameOutput]} // V5 API FIX: Replaced frameProcessor with outputs array
+        frameProcessor={frameProcessor}
+        pixelFormat="native"
       />
+      
       <View style={styles.overlay}>
-        <Text style={styles.promptText}>{promptText}</Text>
-        {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
+        <View style={styles.instructionCard}>
+          <Text style={styles.promptText}>{promptText}</Text>
+          {isVerifying && <ActivityIndicator color="#000" size="small" />}
+        </View>
+
+        <View style={styles.progressBar}>
+          <View style={[styles.progressFill, { width: step === LivenessStep.BLINK ? '33%' : step === LivenessStep.TURN ? '66%' : '100%' }]} />
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
-  },
-  overlay: {
-    position: 'absolute',
-    bottom: 48,
-    left: 24,
-    right: 24,
-    alignItems: 'center',
-  },
-  promptText: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
-    textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: {width: -1, height: 1},
-    textShadowRadius: 10,
-  },
-  errorText: {
-    color: '#ff6b6b',
-    marginTop: 8,
-    textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    padding: 4,
-    borderRadius: 4,
-  },
-  infoText: {
-    color: '#fff',
-    fontSize: 16,
-    textAlign: 'center',
-  },
+  container: { flex: 1, backgroundColor: '#000' },
+  overlay: { position: 'absolute', bottom: 50, left: 24, right: 24, alignItems: 'center' },
+  instructionCard: { backgroundColor: 'white', padding: 20, borderRadius: 15, alignItems: 'center', width: '100%' },
+  promptText: { color: '#000', fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  infoText: { color: '#fff', fontSize: 16, textAlign: 'center' },
+  progressBar: { width: '100%', height: 8, backgroundColor: '#333', borderRadius: 4, marginTop: 20 },
+  progressFill: { height: 8, backgroundColor: '#4CAF50', borderRadius: 4 },
 });
