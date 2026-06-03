@@ -12,6 +12,15 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableMap;
+
+import com.google.mediapipe.framework.image.BitmapImageBuilder;
+import com.google.mediapipe.framework.image.MPImage;
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
+import com.google.mediapipe.tasks.core.BaseOptions;
+import com.google.mediapipe.tasks.vision.core.RunningMode;
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker;
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult;
 
 import org.tensorflow.lite.DataType;
 import org.tensorflow.lite.Interpreter;
@@ -43,6 +52,7 @@ public final class FacialAuthModule extends ReactContextBaseJavaModule {
 
   @Nullable private final Interpreter interpreter;
   @Nullable private final Exception initException;
+  @Nullable private FaceLandmarker faceLandmarker;
 
   private final int inputWidth;
   private final int inputHeight;
@@ -157,6 +167,21 @@ public final class FacialAuthModule extends ReactContextBaseJavaModule {
       embedding = new float[outputElementCount];
       outputBuffer = ByteBuffer.allocateDirect(outputElementCount).order(ByteOrder.nativeOrder());
     }
+    // Initialize MediaPipe Face Landmarker
+try {
+    BaseOptions baseOptions = BaseOptions.builder()
+        .setModelAssetPath("models/face_landmarker.task")
+        .build();
+    FaceLandmarker.FaceLandmarkerOptions lmOptions =
+        FaceLandmarker.FaceLandmarkerOptions.builder()
+            .setBaseOptions(baseOptions)
+            .setRunningMode(RunningMode.IMAGE)
+            .setNumFaces(1)
+            .build();
+    faceLandmarker = FaceLandmarker.createFromOptions(reactContext, lmOptions);
+} catch (Exception e) {
+    faceLandmarker = null;
+}
   }
 
   @Override
@@ -190,6 +215,51 @@ public final class FacialAuthModule extends ReactContextBaseJavaModule {
           }
         });
   }
+
+  @ReactMethod
+public void detectLandmarks(String imagePath, Promise promise) {
+    if (imagePath == null || imagePath.trim().isEmpty()) {
+        promise.reject("E_INVALID_PATH", "imagePath is null or empty.");
+        return;
+    }
+    if (faceLandmarker == null) {
+        promise.reject("E_LANDMARKER_INIT", "Face landmarker not initialized.");
+        return;
+    }
+    final String normalizedPath = normalizePath(imagePath);
+    executor.execute(() -> {
+        try {
+            Bitmap bitmap = BitmapFactory.decodeFile(normalizedPath);
+            if (bitmap == null) {
+                promise.resolve(null);
+                return;
+            }
+            MPImage mpImage = new BitmapImageBuilder(bitmap).build();
+            FaceLandmarkerResult result;
+            synchronized (interpreterLock) {
+                result = faceLandmarker.detect(mpImage);
+            }
+            bitmap.recycle();
+            new java.io.File(normalizedPath).delete(); // clean up temp photo
+
+            if (result.faceLandmarks().isEmpty()) {
+                promise.resolve(null);
+                return;
+            }
+            WritableArray arr = Arguments.createArray();
+            for (NormalizedLandmark lm : result.faceLandmarks().get(0)) {
+                WritableMap pt = Arguments.createMap();
+                pt.putDouble("x", lm.x());
+                pt.putDouble("y", lm.y());
+                pt.putDouble("z", lm.z());
+                arr.pushMap(pt);
+            }
+            promise.resolve(arr);
+        } catch (Exception e) {
+            promise.reject("E_LANDMARK", "Landmark detection failed.", e);
+        }
+    });
+}
 
   @Override
   public void onCatalystInstanceDestroy() {
@@ -401,4 +471,7 @@ public final class FacialAuthModule extends ReactContextBaseJavaModule {
           FileChannel.MapMode.READ_ONLY, afd.getStartOffset(), afd.getDeclaredLength());
     }
   }
+
+
 }
+

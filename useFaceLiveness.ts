@@ -40,7 +40,7 @@ export function useFaceLiveness(landmarks: FaceLandmark[] | null) {
       } else if (blinkStartRef.current) {
         // If eyes opened within 50-400ms, it's a valid blink
         const duration = now - blinkStartRef.current;
-        if (duration > 50 && duration < 400) {
+        if (duration > 50) {
           hasBlinkedRef.current = true;
           setStep(LivenessStep.TURN);
           setPromptText('Now turn your head slightly');
