@@ -22,7 +22,12 @@ class MainApplication : Application(), ReactApplication {
   }
 
   override fun onCreate() {
-    super.onCreate()
-    loadReactNative(this)
+    try {
+      super.onCreate()
+      loadReactNative(this)
+    } catch (e: Exception) {
+      e.printStackTrace()
+      throw RuntimeException("React Native initialization failed", e)
+    }
   }
 }

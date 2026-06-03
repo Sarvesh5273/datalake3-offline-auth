@@ -168,20 +168,21 @@ public final class FacialAuthModule extends ReactContextBaseJavaModule {
       outputBuffer = ByteBuffer.allocateDirect(outputElementCount).order(ByteOrder.nativeOrder());
     }
     // Initialize MediaPipe Face Landmarker
-try {
-    BaseOptions baseOptions = BaseOptions.builder()
-        .setModelAssetPath("models/face_landmarker.task")
-        .build();
-    FaceLandmarker.FaceLandmarkerOptions lmOptions =
-        FaceLandmarker.FaceLandmarkerOptions.builder()
-            .setBaseOptions(baseOptions)
-            .setRunningMode(RunningMode.IMAGE)
-            .setNumFaces(1)
+    try {
+        String modelPath = "face_landmarker.task";
+        BaseOptions baseOptions = BaseOptions.builder()
+            .setModelAssetPath(modelPath)
             .build();
-    faceLandmarker = FaceLandmarker.createFromOptions(reactContext, lmOptions);
-} catch (Exception e) {
-    faceLandmarker = null;
-}
+        FaceLandmarker.FaceLandmarkerOptions lmOptions =
+            FaceLandmarker.FaceLandmarkerOptions.builder()
+                .setBaseOptions(baseOptions)
+                .setRunningMode(RunningMode.IMAGE)
+                .setNumFaces(1)
+                .build();
+        faceLandmarker = FaceLandmarker.createFromOptions(reactContext, lmOptions);
+    } catch (Exception e) {
+        faceLandmarker = null;
+    }
   }
 
   @Override
